@@ -49,6 +49,7 @@ jobs:
 
           # Create labels if they don't already exist.
           labels = {
+              "dashboard": "1d76db",
               "bug": "d73a4a",
               "enhancement": "a2eeef",
               "documentation": "0075ca",
