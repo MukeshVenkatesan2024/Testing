@@ -1,0 +1,143 @@
+name: Import Issues
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  import-issues:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Import issues from CSV
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          python3 <<'PY'
+          import csv
+          import os
+          import subprocess
+          import sys
+
+          csv_file = "github_issues.csv"
+
+          if not os.path.exists(csv_file):
+              print(f"ERROR: {csv_file} not found")
+              sys.exit(1)
+
+          def gh(*args):
+              result = subprocess.run(
+                  ["gh", *args],
+                  text=True,
+                  capture_output=True
+              )
+
+              if result.returncode != 0:
+                  print(result.stderr)
+                  sys.exit(result.returncode)
+
+              return result.stdout.strip()
+
+          repo = os.environ["GH_REPO"]
+
+          # Create labels if they don't already exist.
+          labels = {
+              "bug": "d73a4a",
+              "enhancement": "a2eeef",
+              "documentation": "0075ca",
+              "frontend": "7057ff",
+              "backend": "5319e7",
+              "api": "1d76db",
+              "authentication": "fbca04",
+              "security": "b60205",
+              "database": "0e8a16",
+              "performance": "f9d0c4",
+              "ui": "cfd3d7",
+              "mobile": "e99695",
+              "testing": "bfdadc",
+              "admin": "d93f0b",
+              "ci": "006b75",
+              "infrastructure": "ededed",
+              "deployment": "c5def5",
+              "maintenance": "fef2c0",
+              "validation": "d4c5f9",
+              "search": "fbca04",
+              "settings": "f9d0c4",
+              "release": "5319e7",
+              "development": "bfd4f2",
+              "refactoring": "e6e6e6",
+              "analytics": "1d76db",
+              "export": "0e8a16"
+          }
+
+          print("Creating/checking labels...")
+
+          for name, color in labels.items():
+              result = subprocess.run(
+                  [
+                      "gh", "label", "create", name,
+                      "--repo", repo,
+                      "--color", color,
+                      "--force"
+                  ],
+                  text=True,
+                  capture_output=True
+              )
+
+              if result.returncode == 0:
+                  print(f"  Label ready: {name}")
+              else:
+                  print(f"  Warning: could not create label '{name}'")
+
+          print("\nImporting issues...\n")
+
+          with open(csv_file, newline="", encoding="utf-8") as f:
+              reader = csv.DictReader(f)
+
+              for number, row in enumerate(reader, start=1):
+                  title = row["title"].strip()
+                  body = row["body"].strip()
+                  label_string = row.get("labels", "").strip()
+
+                  labels_list = [
+                      label.strip()
+                      for label in label_string.split(",")
+                      if label.strip()
+                  ]
+
+                  print(f"[{number}] Creating: {title}")
+
+                  command = [
+                      "gh", "issue", "create",
+                      "--repo", repo,
+                      "--title", title,
+                      "--body", body
+                  ]
+
+                  for label in labels_list:
+                      command.extend(["--label", label])
+
+                  result = subprocess.run(
+                      command,
+                      text=True,
+                      capture_output=True
+                  )
+
+                  if result.returncode != 0:
+                      print("ERROR:")
+                      print(result.stderr)
+                      sys.exit(result.returncode)
+
+                  print(f"    Created: {result.stdout.strip()}")
+
+          print("\n================================")
+          print("Successfully imported all issues!")
+          print("================================")
+          PY
