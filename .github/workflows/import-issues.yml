@@ -25,120 +25,240 @@ jobs:
           import os
           import subprocess
           import sys
+          import time
 
-          csv_file = "github_issues.csv"
+          CSV_FILE = "github_issues.csv"
+          REPO = os.environ["GH_REPO"]
 
-          if not os.path.exists(csv_file):
-              print(f"ERROR: {csv_file} not found")
+          if not os.path.exists(CSV_FILE):
+              print(f"ERROR: {CSV_FILE} not found")
               sys.exit(1)
 
-          def gh(*args):
+          def run_command(command):
               result = subprocess.run(
-                  ["gh", *args],
+                  command,
                   text=True,
                   capture_output=True
               )
 
               if result.returncode != 0:
                   print(result.stderr)
-                  sys.exit(result.returncode)
+                  return None
 
               return result.stdout.strip()
 
-          repo = os.environ["GH_REPO"]
+          # --------------------------------------------------
+          # Read CSV
+          # --------------------------------------------------
 
-          # Create labels if they don't already exist.
-          labels = {
-              "dashboard": "1d76db",
-              "bug": "d73a4a",
-              "enhancement": "a2eeef",
-              "documentation": "0075ca",
-              "frontend": "7057ff",
-              "backend": "5319e7",
-              "api": "1d76db",
-              "authentication": "fbca04",
-              "security": "b60205",
-              "database": "0e8a16",
-              "performance": "f9d0c4",
-              "ui": "cfd3d7",
-              "mobile": "e99695",
-              "testing": "bfdadc",
-              "admin": "d93f0b",
-              "ci": "006b75",
-              "infrastructure": "ededed",
-              "deployment": "c5def5",
-              "maintenance": "fef2c0",
-              "validation": "d4c5f9",
-              "search": "fbca04",
-              "settings": "f9d0c4",
-              "release": "5319e7",
-              "development": "bfd4f2",
-              "refactoring": "e6e6e6",
-              "analytics": "1d76db",
-              "export": "0e8a16"
-          }
+          with open(CSV_FILE, newline="", encoding="utf-8-sig") as file:
+              rows = list(csv.DictReader(file))
 
-          print("Creating/checking labels...")
+          print(f"Found {len(rows)} issues in CSV")
 
-          for name, color in labels.items():
+          # --------------------------------------------------
+          # Collect ALL labels from CSV
+          # --------------------------------------------------
+
+          all_labels = set()
+
+          for row in rows:
+              label_string = row.get("labels", "") or ""
+
+              for label in label_string.split(","):
+                  label = label.strip()
+
+                  if label:
+                      all_labels.add(label)
+
+          print("\nLabels found in CSV:")
+
+          for label in sorted(all_labels):
+              print(f"  - {label}")
+
+          # --------------------------------------------------
+          # Get existing GitHub labels
+          # --------------------------------------------------
+
+          existing_labels_output = run_command([
+              "gh", "label", "list",
+              "--repo", REPO,
+              "--limit", "1000",
+              "--json", "name"
+          ])
+
+          existing_labels = set()
+
+          if existing_labels_output:
+              import json
+
+              try:
+                  data = json.loads(existing_labels_output)
+
+                  for item in data:
+                      existing_labels.add(item["name"])
+
+              except Exception:
+                  pass
+
+          # --------------------------------------------------
+          # Create missing labels
+          # --------------------------------------------------
+
+          print("\nChecking labels...")
+
+          for label in sorted(all_labels):
+
+              if label in existing_labels:
+                  print(f"  EXISTS: {label}")
+                  continue
+
+              print(f"  CREATING: {label}")
+
               result = subprocess.run(
                   [
-                      "gh", "label", "create", name,
-                      "--repo", repo,
-                      "--color", color,
-                      "--force"
+                      "gh",
+                      "label",
+                      "create",
+                      label,
+                      "--repo",
+                      REPO,
+                      "--color",
+                      "ededed"
                   ],
                   text=True,
                   capture_output=True
               )
 
               if result.returncode == 0:
-                  print(f"  Label ready: {name}")
+                  print(f"  CREATED: {label}")
+                  existing_labels.add(label)
               else:
-                  print(f"  Warning: could not create label '{name}'")
+                  print(f"  WARNING: Could not create '{label}'")
+                  print(result.stderr)
 
-          print("\nImporting issues...\n")
+          # --------------------------------------------------
+          # Get existing issue titles
+          # --------------------------------------------------
 
-          with open(csv_file, newline="", encoding="utf-8") as f:
-              reader = csv.DictReader(f)
+          print("\nChecking existing issues...")
 
-              for number, row in enumerate(reader, start=1):
-                  title = row["title"].strip()
-                  body = row["body"].strip()
-                  label_string = row.get("labels", "").strip()
+          existing_output = run_command([
+              "gh",
+              "issue",
+              "list",
+              "--repo",
+              REPO,
+              "--state",
+              "all",
+              "--limit",
+              "1000",
+              "--json",
+              "title"
+          ])
 
-                  labels_list = [
-                      label.strip()
-                      for label in label_string.split(",")
-                      if label.strip()
-                  ]
+          existing_titles = set()
 
-                  print(f"[{number}] Creating: {title}")
+          if existing_output:
+              import json
 
-                  command = [
-                      "gh", "issue", "create",
-                      "--repo", repo,
-                      "--title", title,
-                      "--body", body
-                  ]
+              try:
+                  data = json.loads(existing_output)
 
-                  for label in labels_list:
-                      command.extend(["--label", label])
+                  for issue in data:
+                      existing_titles.add(issue["title"].strip())
 
-                  result = subprocess.run(
-                      command,
-                      text=True,
-                      capture_output=True
-                  )
+              except Exception:
+                  pass
 
-                  if result.returncode != 0:
-                      print("ERROR:")
-                      print(result.stderr)
-                      sys.exit(result.returncode)
-
-                  print(f"    Created: {result.stdout.strip()}")
+          # --------------------------------------------------
+          # Import issues
+          # --------------------------------------------------
 
           print("\n================================")
-          print("Successfully imported all issues!")
+          print("Starting issue import")
+          print("================================\n")
+
+          created = 0
+          skipped = 0
+          failed = 0
+
+          for number, row in enumerate(rows, start=1):
+
+              title = (row.get("title") or "").strip()
+              body = (row.get("body") or "").strip()
+              label_string = (row.get("labels") or "").strip()
+
+              if not title:
+                  print(f"[{number}] SKIPPED: Empty title")
+                  skipped += 1
+                  continue
+
+              # Skip duplicates
+              if title in existing_titles:
+                  print(f"[{number}] SKIPPED: {title}")
+                  skipped += 1
+                  continue
+
+              labels = [
+                  label.strip()
+                  for label in label_string.split(",")
+                  if label.strip()
+              ]
+
+              print(f"[{number}] Creating: {title}")
+
+              command = [
+                  "gh",
+                  "issue",
+                  "create",
+                  "--repo",
+                  REPO,
+                  "--title",
+                  title,
+                  "--body",
+                  body
+              ]
+
+              for label in labels:
+                  command.extend([
+                      "--label",
+                      label
+                  ])
+
+              result = subprocess.run(
+                  command,
+                  text=True,
+                  capture_output=True
+              )
+
+              if result.returncode == 0:
+                  print(f"    CREATED: {result.stdout.strip()}")
+
+                  existing_titles.add(title)
+                  created += 1
+
+              else:
+                  print(f"    FAILED: {title}")
+                  print(result.stderr)
+
+                  failed += 1
+
+              # Small delay to avoid hitting API limits
+              time.sleep(1)
+
+          # --------------------------------------------------
+          # Summary
+          # --------------------------------------------------
+
+          print("\n================================")
+          print("IMPORT COMPLETE")
           print("================================")
+          print(f"Created : {created}")
+          print(f"Skipped : {skipped}")
+          print(f"Failed  : {failed}")
+          print("================================")
+
+          if failed > 0:
+              sys.exit(1)
           PY
